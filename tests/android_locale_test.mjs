@@ -46,4 +46,10 @@ for (const [key, value] of base) {
   }
 }
 
-console.log(`PASS: Vietnamese locale covers all ${base.size} string resources with matching placeholders.`);
+const proxyNodeKeys = [...vi.keys()].filter((key) => key.includes('node'));
+const literalNodeKeys = proxyNodeKeys.filter((key) => /\bnút\b/iu.test(vi.get(key)));
+if (literalNodeKeys.length) {
+  fail(`proxy terminology must use "node", not "nút": ${literalNodeKeys.join(', ')}`);
+}
+
+console.log(`PASS: Vietnamese locale covers all ${base.size} string resources with matching placeholders and proxy terminology.`);
