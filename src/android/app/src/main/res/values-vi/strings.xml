@@ -441,4 +441,8 @@
     <string name="user_id_uuid">ID người dùng (UUID, tùy chọn)</string>
     <string name="utls_fingerprint">Dấu vân tay uTLS (Fingerprint)</string>
     <string name="zero_rtt_handshake">Zero RTT Handshake (0-RTT)</string>
+    <string name="settings_language">Ngôn ngữ</string>
+    <string name="settings_language_system">Theo hệ thống</string>
+    <string name="settings_language_chinese">中文</string>
+    <string name="settings_language_vietnamese">Tiếng Việt</string>
 </resources>

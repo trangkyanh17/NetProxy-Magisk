@@ -6,6 +6,10 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..');
 const basePath = path.join(repoRoot, 'src/android/app/src/main/res/values/strings.xml');
 const viPath = path.join(repoRoot, 'src/android/app/src/main/res/values-vi/strings.xml');
+const localeConfigPath = path.join(repoRoot, 'src/android/app/src/main/res/xml/locales_config.xml');
+const manifestPath = path.join(repoRoot, 'src/android/app/src/main/AndroidManifest.xml');
+const settingsScreenPath = path.join(repoRoot, 'src/android/app/src/main/java/com/fanjv/netproxy/feature/settings/presentation/SettingsScreen.kt');
+const localeControllerPath = path.join(repoRoot, 'src/android/app/src/main/java/com/fanjv/netproxy/core/locale/AppLocaleController.kt');
 
 function fail(message) {
   console.error(`FAIL: ${message}`);
@@ -52,4 +56,26 @@ if (literalNodeKeys.length) {
   fail(`proxy terminology must use "node", not "nút": ${literalNodeKeys.join(', ')}`);
 }
 
-console.log(`PASS: Vietnamese locale covers all ${base.size} string resources with matching placeholders and proxy terminology.`);
+if (!fs.existsSync(localeConfigPath)) fail('Android per-app locale config is missing');
+const localeConfig = fs.readFileSync(localeConfigPath, 'utf8');
+for (const tag of ['zh-CN', 'vi']) {
+  if (!localeConfig.includes(`android:name="${tag}"`)) fail(`locale config is missing ${tag}`);
+}
+
+const manifest = fs.readFileSync(manifestPath, 'utf8');
+if (!manifest.includes('android:localeConfig="@xml/locales_config"')) {
+  fail('AndroidManifest does not expose per-app language settings');
+}
+
+if (!fs.existsSync(localeControllerPath)) fail('AppLocaleController is missing');
+const localeController = fs.readFileSync(localeControllerPath, 'utf8');
+for (const token of ['LocaleManager', 'applicationLocales', 'createConfigurationContext']) {
+  if (!localeController.includes(token)) fail(`AppLocaleController is missing ${token}`);
+}
+
+const settingsScreen = fs.readFileSync(settingsScreenPath, 'utf8');
+for (const token of ['R.string.settings_language', 'OverlayDropdownPreference', 'AppLocaleController.setLanguage']) {
+  if (!settingsScreen.includes(token)) fail(`Settings language selector is missing ${token}`);
+}
+
+console.log(`PASS: Vietnamese locale covers all ${base.size} string resources, preserves placeholders, and exposes app language selection.`);

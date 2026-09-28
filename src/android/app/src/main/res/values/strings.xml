@@ -439,4 +439,8 @@
     <string name="user_id_uuid">用户 ID (UUID，可选)</string>
     <string name="utls_fingerprint">uTLS 指纹 (Fingerprint)</string>
     <string name="zero_rtt_handshake">Zero RTT Handshake (0-RTT)</string>
+    <string name="settings_language">语言</string>
+    <string name="settings_language_system">跟随系统</string>
+    <string name="settings_language_chinese">中文</string>
+    <string name="settings_language_vietnamese">Tiếng Việt</string>
 </resources>

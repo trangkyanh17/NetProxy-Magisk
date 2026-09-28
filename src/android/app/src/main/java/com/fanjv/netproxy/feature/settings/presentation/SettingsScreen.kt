@@ -14,6 +14,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AppRegistration
 import androidx.compose.material.icons.rounded.BugReport
 import androidx.compose.material.icons.rounded.ContactPage
+import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.PowerSettingsNew
@@ -24,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
+import androidx.activity.compose.LocalActivity
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -31,6 +33,7 @@ import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.fanjv.netproxy.R
 import com.fanjv.netproxy.core.di.netProxyViewModel
+import com.fanjv.netproxy.core.locale.AppLocaleController
 import com.fanjv.netproxy.core.ui.component.BlurredBar
 import com.fanjv.netproxy.core.ui.component.CardItem
 import com.fanjv.netproxy.core.ui.component.groupedCardItems
@@ -43,6 +46,7 @@ import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.TopAppBar
 import top.yukonga.miuix.kmp.blur.layerBackdrop
 import top.yukonga.miuix.kmp.preference.ArrowPreference
+import top.yukonga.miuix.kmp.preference.OverlayDropdownPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme.colorScheme
 import top.yukonga.miuix.kmp.utils.overScrollVertical
@@ -58,6 +62,7 @@ internal fun SettingsScreen(
     val settings by viewModel.state.collectAsStateWithLifecycle()
     val navigator = LocalNavigator.current
     val context = LocalContext.current
+    val activity = LocalActivity.current
     val resources = LocalResources.current
 
     val scrollBehavior = MiuixScrollBehavior()
@@ -186,6 +191,35 @@ internal fun SettingsScreen(
                                     )
                                 },
                                 onClick = { navigator.push(Route.ThemeSettings) }
+                            )
+                        },
+                        CardItem("language") {
+                            val languageTags = listOf(
+                                AppLocaleController.SYSTEM,
+                                AppLocaleController.CHINESE_SIMPLIFIED,
+                                AppLocaleController.VIETNAMESE,
+                            )
+                            val languageItems = listOf(
+                                stringResource(R.string.settings_language_system),
+                                stringResource(R.string.settings_language_chinese),
+                                stringResource(R.string.settings_language_vietnamese),
+                            )
+                            val selectedTag = AppLocaleController.currentLanguageTag(context)
+                            OverlayDropdownPreference(
+                                title = stringResource(R.string.settings_language),
+                                items = languageItems,
+                                startAction = {
+                                    Icon(
+                                        Icons.Rounded.Language,
+                                        modifier = Modifier.padding(end = 6.dp),
+                                        contentDescription = null,
+                                        tint = colorScheme.onBackground
+                                    )
+                                },
+                                selectedIndex = languageTags.indexOf(selectedTag).coerceAtLeast(0),
+                                onSelectedIndexChange = { index ->
+                                    activity?.let { AppLocaleController.setLanguage(it, languageTags[index]) }
+                                }
                             )
                         },
                     ),

@@ -1,5 +1,6 @@
 package com.fanjv.netproxy
 
+import android.content.Context
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
@@ -29,6 +30,7 @@ import androidx.navigationevent.NavigationEventInfo
 import androidx.navigationevent.compose.NavigationBackHandler
 import androidx.navigationevent.compose.rememberNavigationEventState
 import com.fanjv.netproxy.core.di.netProxyViewModel
+import com.fanjv.netproxy.core.locale.AppLocaleController
 import com.fanjv.netproxy.core.ui.theme.AppThemeSettings
 import com.fanjv.netproxy.core.ui.theme.ColorMode
 import com.fanjv.netproxy.core.ui.theme.NetProxyTheme
@@ -73,6 +75,10 @@ import top.yukonga.miuix.kmp.theme.ThemeColorSpec
 import top.yukonga.miuix.kmp.theme.ThemePaletteStyle
 
 class MainActivity : ComponentActivity() {
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(AppLocaleController.wrapContext(newBase))
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         setTheme(R.style.Theme_NetProxy)
         super.onCreate(savedInstanceState)
