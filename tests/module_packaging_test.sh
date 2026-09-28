@@ -11,6 +11,7 @@ BUILD_ACTION="$ROOT/.github/actions/build-module/action.yml"
 RELEASE_WORKFLOW="$ROOT/.github/workflows/release.yml"
 CI_WORKFLOW="$ROOT/.github/workflows/ci.yml"
 VERIFY_SCRIPT="$ROOT/tests/ci_verify.sh"
+MODULE_PROP="$ROOT/src/module/module.prop"
 
 assert_contains() {
   grep -Fq -- "$2" "$1" || {
@@ -47,6 +48,7 @@ assert_contains "$ROOT/src/android/app/src/main/java/com/fanjv/netproxy/core/app
 assert_contains "$ROOT/.gitignore" 'src/module/NetProxy.apk'
 assert_contains "$VERIFY_SCRIPT" './cmd/netproxyctl'
 assert_contains "$VERIFY_SCRIPT" "-ldflags='-s -w -buildid='"
+assert_contains "$MODULE_PROP" 'updateJson=https://github.com/trangkyanh17/NetProxy-Magisk/releases/latest/download/update.json'
 assert_not_contains "$BUILD_ACTION" 'full_name|lite_name|_lite'
 assert_not_contains "$BUILD_ACTION" 'netproxy-native|cmd/netproxy-native'
 [ ! -e "$ROOT/src/module/bin/netproxy-native" ] || {
