@@ -28,7 +28,7 @@
 </p>
 
 <p align="center">
-  中文 | <a href="README_EN.md">English</a>
+  中文 | <a href="README_EN.md">English</a> | <a href="README_VI.md">Tiếng Việt</a>
 </p>
 
 ---
