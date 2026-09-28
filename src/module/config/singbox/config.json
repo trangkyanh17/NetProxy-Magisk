@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/reF1nd/sing-box/reF1nd-testing-next/docs/schema.json",
   "log": {
     "disabled": false,
-    "level": "info",
+    "level": "warn",
     "output": "/data/adb/modules/netproxy/logs/sing-box.log",
     "timestamp": true
   },
@@ -254,7 +254,7 @@
         "outbound": "direct"
       }
     ],
-    "find_process": true,
+    "find_process": false,
     "auto_detect_interface": true,
     "final": "Proxy"
   }

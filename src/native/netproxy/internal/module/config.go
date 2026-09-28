@@ -21,9 +21,10 @@ import (
 )
 
 var (
-	configProcessRunning = service.ProcessRunning
-	configReload         = reloadAppliedConfig
-	configRestoreReload  = reloadConfigSnapshot
+	configProcessRunning  = service.ProcessRunning
+	configReload          = reloadAppliedConfig
+	configRestoreReload   = reloadConfigSnapshot
+	configWorkerReconcile = reconcileWorker
 )
 
 // ConfigDocument 是配置工作台可见的文件摘要。
@@ -252,6 +253,7 @@ func ApplyConfig(ctx context.Context, options Options, target, source string, va
 	if err != nil {
 		return "", err
 	}
+	workerConfigChanged := false
 	candidate, err := os.CreateTemp(filepath.Dir(destination), ".config-candidate-")
 	if err != nil {
 		return "", err
@@ -275,6 +277,13 @@ func ApplyConfig(ctx context.Context, options Options, target, source string, va
 	if validateOnly {
 		return revision, nil
 	}
+	if target == "module" {
+		previous, previousErr := moduleconfig.LoadModule(destination)
+		next, nextErr := moduleconfig.LoadModule(candidatePath)
+		if nextErr == nil {
+			workerConfigChanged = previousErr != nil || previous.WiFiAutoSwitch != next.WiFiAutoSwitch
+		}
+	}
 	transaction, err := beginConfigApply(options, destination)
 	if err != nil {
 		return "", err
@@ -289,6 +298,7 @@ func ApplyConfig(ctx context.Context, options Options, target, source string, va
 		if err := transaction.commit(); err != nil {
 			return "", errors.Join(fmt.Errorf("提交配置事务失败: %w", err), transaction.rollback())
 		}
+		reconcileConfigWorker(ctx, options, workerConfigChanged)
 		return revision, nil
 	}
 	if err := transaction.setPhase("reload_started"); err != nil {
@@ -320,7 +330,17 @@ func ApplyConfig(ctx context.Context, options Options, target, source string, va
 	if err := transaction.commit(); err != nil {
 		return "", rollbackAfterCommitFailure(ctx, options, transaction, err)
 	}
+	reconcileConfigWorker(ctx, options, workerConfigChanged)
 	return revision, nil
+}
+
+func reconcileConfigWorker(ctx context.Context, options Options, changed bool) {
+	if !changed {
+		return
+	}
+	if err := configWorkerReconcile(ctx, options); err != nil {
+		logService(options, "WARN", "worker.reconcile", "failed", "WiFi 自动切换配置已保存，但后台 Worker 重整失败: %v", err)
+	}
 }
 
 func rollbackAfterCommitFailure(ctx context.Context, options Options, transaction *configApplyTransaction, commitErr error) error {

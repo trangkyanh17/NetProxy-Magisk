@@ -13,6 +13,8 @@ const list = value => value === undefined ? [] : Array.isArray(value) ? value : 
 test('默认配置仅保留部署与运行时生成所需的上游差异', () => {
   const expected = structuredClone(upstream)
   expected.log.output = '/data/adb/modules/netproxy/logs/sing-box.log'
+  expected.log.level = 'warn'
+  expected.route.find_process = false
   expected.experimental.cache_file.path = '/data/adb/modules/netproxy/config/singbox/cache.db'
   expected.experimental.clash_api.external_controller = '127.0.0.1:9999'
   delete expected.experimental.clash_api.external_ui

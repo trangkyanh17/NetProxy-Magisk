@@ -131,12 +131,13 @@ func configApplyOptions(t *testing.T) (Options, string, string, map[string]strin
 
 func isolateConfigApplyHooks(t *testing.T, running bool) {
 	t.Helper()
-	originalRunning, originalReload, originalRestore, originalJournalWrite, originalSnapshotRestore := configProcessRunning, configReload, configRestoreReload, configJournalWrite, configSnapshotRestore
+	originalRunning, originalReload, originalRestore, originalWorkerReconcile, originalJournalWrite, originalSnapshotRestore := configProcessRunning, configReload, configRestoreReload, configWorkerReconcile, configJournalWrite, configSnapshotRestore
 	configProcessRunning = func(string) bool { return running }
 	t.Cleanup(func() {
 		configProcessRunning = originalRunning
 		configReload = originalReload
 		configRestoreReload = originalRestore
+		configWorkerReconcile = originalWorkerReconcile
 		configJournalWrite = originalJournalWrite
 		configSnapshotRestore = originalSnapshotRestore
 	})
@@ -380,6 +381,50 @@ func TestApplyConfigCommitFailureReportsRollbackErrors(t *testing.T) {
 	assertRuntimeContent(t, options, runtimeContent)
 	if _, err := os.Stat(filepath.Join(configTransactionPath(options), "journal.json")); err != nil {
 		t.Fatalf("失败后必须保留恢复 journal: %v", err)
+	}
+}
+
+func TestApplyModuleConfigReconcilesWorkerWhenWiFiAutoSwitchChanges(t *testing.T) {
+	options, _, source, _ := configApplyOptions(t)
+	isolateConfigApplyHooks(t, false)
+	if err := os.WriteFile(options.ModuleConfig, []byte("WIFI_AUTO_SWITCH=0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(source, []byte("WIFI_AUTO_SWITCH=1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	configWorkerReconcile = func(context.Context, Options) error {
+		calls++
+		return nil
+	}
+	if _, err := ApplyConfig(t.Context(), options, "module", source, false, ""); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("WiFi 自动切换状态变化后 Worker 重整次数 = %d, want 1", calls)
+	}
+}
+
+func TestApplyModuleConfigDoesNotRestartWorkerForUnrelatedSetting(t *testing.T) {
+	options, _, source, _ := configApplyOptions(t)
+	isolateConfigApplyHooks(t, false)
+	if err := os.WriteFile(options.ModuleConfig, []byte("WIFI_AUTO_SWITCH=0\nOUTBOUND_MODE=rule\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(source, []byte("WIFI_AUTO_SWITCH=0\nOUTBOUND_MODE=global\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	configWorkerReconcile = func(context.Context, Options) error {
+		calls++
+		return nil
+	}
+	if _, err := ApplyConfig(t.Context(), options, "module", source, false, ""); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 0 {
+		t.Fatalf("无关设置变化不应重启 Worker: %d", calls)
 	}
 }
 

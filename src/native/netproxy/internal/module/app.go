@@ -23,6 +23,11 @@ import (
 	"github.com/Fanju6/NetProxy-Magisk/src/native/netproxy/internal/worker"
 )
 
+var (
+	workerStartProcess = worker.Start
+	workerStopProcess  = worker.Stop
+)
+
 // Options 描述模块目录、运行时目录和平台适配器路径。
 type Options struct {
 	ModuleDir          string
@@ -819,7 +824,23 @@ func UpdateAllSubscriptions(ctx context.Context, options Options) (result worker
 	return summary, firstUpdateErr
 }
 
+func reconcileWorker(ctx context.Context, options Options) error {
+	workerOpts := workerOptions(options)
+	if err := workerStopProcess(workerOpts); err != nil {
+		return fmt.Errorf("停止旧 Worker: %w", err)
+	}
+	executable := paths.New(options.ModuleDir).Executable()
+	if _, err := workerStartProcess(ctx, workerOpts, executable); err != nil {
+		return fmt.Errorf("按新配置启动 Worker: %w", err)
+	}
+	return nil
+}
+
 func workerOptions(options Options) worker.Options {
+	networkWatchEnabled := true
+	if module, err := moduleconfig.LoadModule(options.ModuleConfig); err == nil {
+		networkWatchEnabled = module.WiFiAutoSwitch
+	}
 	workerOptions := worker.Options{
 		Root:                options.CatalogRoot,
 		ProgressDir:         options.ProgressDir,
@@ -829,7 +850,7 @@ func workerOptions(options Options) worker.Options {
 		SingBoxPath:         options.SingBoxPath,
 		ServiceAddress:      options.ServiceAddress,
 		ServiceSecret:       options.ServiceSecret,
-		NetworkWatchEnabled: true,
+		NetworkWatchEnabled: networkWatchEnabled,
 		ReloadService: func(ctx context.Context) error {
 			return ReloadService(ctx, options)
 		},

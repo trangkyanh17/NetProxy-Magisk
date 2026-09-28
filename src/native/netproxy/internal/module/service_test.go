@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/Fanju6/NetProxy-Magisk/src/native/netproxy/internal/worker"
 )
 
 func TestServiceStartFailureReportsCheckError(t *testing.T) {
@@ -138,13 +140,73 @@ func TestToggleServiceAction(t *testing.T) {
 	}
 }
 
-func TestWorkerOptionsKeepNetworkWatcherEnabled(t *testing.T) {
-	options := workerOptions(newTestOptions(t.TempDir()))
-	if !options.NetworkWatchEnabled {
-		t.Fatal("Worker 必须默认监听 Android 网络变化")
+func TestReconcileWorkerRestartsWithCurrentWiFiPolicy(t *testing.T) {
+	root := t.TempDir()
+	options := newTestOptions(root)
+	if err := os.MkdirAll(filepath.Dir(options.ModuleConfig), 0o700); err != nil {
+		t.Fatal(err)
 	}
-	if options.NetworkEvaluate == nil {
-		t.Fatal("Worker 必须配置网络策略评估回调")
+	if err := os.WriteFile(options.ModuleConfig, []byte("WIFI_AUTO_SWITCH=0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	originalStop, originalStart := workerStopProcess, workerStartProcess
+	t.Cleanup(func() {
+		workerStopProcess = originalStop
+		workerStartProcess = originalStart
+	})
+	order := make([]string, 0, 2)
+	workerStopProcess = func(opts worker.Options) error {
+		order = append(order, "stop")
+		if opts.NetworkWatchEnabled {
+			t.Fatal("WiFi 自动切换关闭后重整 Worker 不应继续监听网络")
+		}
+		return nil
+	}
+	workerStartProcess = func(_ context.Context, opts worker.Options, _ string) (worker.Status, error) {
+		order = append(order, "start")
+		if opts.NetworkWatchEnabled {
+			t.Fatal("重启后的 Worker 使用了过期的网络监听设置")
+		}
+		return worker.Status{State: "stopped"}, nil
+	}
+	if err := reconcileWorker(t.Context(), options); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(order, ",") != "stop,start" {
+		t.Fatalf("Worker 重整顺序 = %v, want [stop start]", order)
+	}
+}
+
+func TestWorkerOptionsDisableNetworkWatcherWhenWiFiAutoSwitchOff(t *testing.T) {
+	root := t.TempDir()
+	options := newTestOptions(root)
+	if err := os.MkdirAll(filepath.Dir(options.ModuleConfig), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(options.ModuleConfig, []byte("WIFI_AUTO_SWITCH=0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workerOptions := workerOptions(options)
+	if workerOptions.NetworkWatchEnabled {
+		t.Fatal("WiFi 自动切换关闭时 Worker 不应常驻监听 Android 网络变化")
+	}
+	if workerOptions.NetworkEvaluate == nil {
+		t.Fatal("Worker 必须保留网络策略评估回调供启用时使用")
+	}
+}
+
+func TestWorkerOptionsEnableNetworkWatcherWhenWiFiAutoSwitchOn(t *testing.T) {
+	root := t.TempDir()
+	options := newTestOptions(root)
+	if err := os.MkdirAll(filepath.Dir(options.ModuleConfig), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(options.ModuleConfig, []byte("WIFI_AUTO_SWITCH=1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workerOptions := workerOptions(options)
+	if !workerOptions.NetworkWatchEnabled {
+		t.Fatal("WiFi 自动切换开启时 Worker 必须监听 Android 网络变化")
 	}
 }
 

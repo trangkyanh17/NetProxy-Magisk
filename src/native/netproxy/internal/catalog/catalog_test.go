@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"encoding/json/jsontext"
 	json "encoding/json/v2"
@@ -67,6 +68,74 @@ func TestScanAndBuildRuntime(t *testing.T) {
 	assertRuntimeGroupSources(t, outbounds)
 	if !strings.Contains(state, "selected_node_ref\tremote/订阅节点") {
 		t.Fatalf("unexpected state: %s", state)
+	}
+}
+
+func TestRuntimePowerDefaultsAvoidDuplicateProviderChecks(t *testing.T) {
+	root := t.TempDir()
+	writeGroup(t, root, "default", "本地配置", "local", "NODE")
+	providersPath := filepath.Join(root, "providers.json")
+	outboundsPath := filepath.Join(root, "outbounds.json")
+	if _, err := BuildRuntime(context.Background(), RuntimeOptions{
+		Root: root, ProvidersOutput: providersPath, OutboundsOutput: outboundsPath,
+		ActiveGroup: "default", SelectorMode: "urltest",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var providers struct {
+		Providers []map[string]jsontext.Value `json:"providers"`
+	}
+	if err := json.Unmarshal([]byte(readFile(t, providersPath)), &providers); err != nil {
+		t.Fatal(err)
+	}
+	for _, provider := range providers.Providers {
+		if _, exists := provider["health_check"]; exists {
+			t.Fatalf("runtime provider should not run a second periodic health check: %s", readFile(t, providersPath))
+		}
+	}
+
+	var outbounds struct {
+		Outbounds []map[string]jsontext.Value `json:"outbounds"`
+	}
+	if err := json.Unmarshal([]byte(readFile(t, outboundsPath)), &outbounds); err != nil {
+		t.Fatal(err)
+	}
+	foundURLTest := false
+	for _, outbound := range outbounds.Outbounds {
+		var outboundType string
+		if raw, ok := outbound["type"]; ok {
+			if err := json.Unmarshal(raw, &outboundType); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if outboundType != "urltest" {
+			continue
+		}
+		foundURLTest = true
+		var interval string
+		if err := json.Unmarshal(outbound["interval"], &interval); err != nil {
+			t.Fatal(err)
+		}
+		duration, err := time.ParseDuration(interval)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if duration != 10*time.Minute {
+			t.Fatalf("automatic URLTest interval = %s, want 10m", interval)
+		}
+		if raw, exists := outbound["interrupt_exist_connections"]; exists {
+			var interrupt bool
+			if err := json.Unmarshal(raw, &interrupt); err != nil {
+				t.Fatal(err)
+			}
+			if interrupt {
+				t.Fatal("automatic URLTest should not interrupt existing connections when selection changes")
+			}
+		}
+	}
+	if !foundURLTest {
+		t.Fatal("runtime did not generate automatic URLTest outbound")
 	}
 }
 
