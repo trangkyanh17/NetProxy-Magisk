@@ -46,5 +46,6 @@ run_shell_contracts() {
 
 build_binaries
 run_shell_contracts
+node "$ROOT/tests/android_locale_test.mjs"
 node --test "$ROOT"/.github/scripts/*.test.mjs
 printf '%s\n' 'Go 与 Shell 契约测试全部通过'
