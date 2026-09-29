@@ -126,14 +126,9 @@ Module mặc định dùng `AUTO_START=0`. Chỉ nên bật tự khởi động 
 
 ### Bản custom hiện tại
 
-Release đang dùng cho nhánh tối ưu tiếng Việt + pin/runtime:
+Bản ổn định mới nhất của nhánh tiếng Việt + tối ưu pin/runtime luôn được công bố tại [Releases của fork](https://github.com/trangkyanh17/NetProxy-Magisk/releases/latest).
 
-- Tag: `v8.2.0-vi-battery-r2`
-- Module build: `970`
-- Manager: `8.2.0-ci.8d0f5e2`
-- File khuyến nghị: `NetProxy_v8.2.0_970_with-manager.zip`
-
-Có thể kiểm SHA256 trong asset `SHA256SUMS.txt` của release trước khi flash.
+Nên tải gói `_with-manager.zip` để nhận đúng Manager tiếng Việt đi kèm với module. Mỗi release đều cung cấp `SHA256SUMS.txt`; nên kiểm SHA256 trước khi flash. README không cố định tag hoặc build number để tránh thông tin bị cũ khi fork có bản phát hành mới.
 
 ### Chuyển Manager sang tiếng Việt
 
