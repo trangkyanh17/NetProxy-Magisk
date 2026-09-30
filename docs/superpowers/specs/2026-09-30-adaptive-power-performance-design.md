@@ -58,16 +58,17 @@ Baseline tiếp tục dùng `EBPF_LOCAL_DATA_PLANE="cgroup"`, `EBPF_LOCAL_DNS_MO
 
 ## 4. Android Manager adaptive behavior
 
-Dashboard dùng state machine bốn mức:
+Dashboard dùng cadence thích ứng theo sự kiện + idle time:
 
-| Trạng thái | Điều kiện | Chu kỳ `service status` |
+| Trạng thái | Điều kiện | Lịch `service status` |
 |---|---|---:|
-| HOT | vừa mở Dashboard, vừa refresh hoặc vừa thao tác Start/Stop/Mode | 2 giây |
-| WARM | không có thao tác mới trong 10–30 giây | 5 giây |
-| IDLE | không có thao tác mới trên 30 giây | 15 giây |
+| EVENT | vừa mở Dashboard, explicit refresh hoặc vừa thao tác Start/Stop/Mode | refresh ngay |
+| CONFIRM | sau EVENT | đúng 1 lần sau 2 giây |
+| WARM | sau CONFIRM, khi lần chờ 5 giây kế tiếp vẫn chưa vượt mốc 30 giây | mỗi 5 giây |
+| IDLE | idle từ 30 giây trở lên | mỗi 15 giây |
 | BACKGROUND | Dashboard không visible hoặc app background | dừng hoàn toàn |
 
-Mỗi thao tác điều khiển service phải lập tức đưa Dashboard về HOT và kích hoạt một refresh ngay sau khi thao tác hoàn tất. Không cho phép nhiều request status chạy song song; request đang chạy phải hoàn tất hoặc bị hủy trước khi lập lịch lần kế tiếp.
+Với một Dashboard được mở rồi để yên, lịch chuẩn là khoảng `0s, 2s, 7s, 12s, 17s, 22s, 27s, 42s, 57s, ...`; trong 5 phút tạo tối đa 25 lần `service status`. Mỗi thao tác điều khiển service phải kích hoạt EVENT mới ngay sau khi thao tác hoàn tất; explicit refresh cũng reset idle timer. Không cho phép nhiều request status chạy song song; wake mới phải được coalesce vào cùng polling loop và không được tạo timer thứ hai.
 
 Coroutine uptime 1 giây hiện tại phải bị loại bỏ. `uptimeSeconds` được suy ra từ `readyAt` tại thời điểm render/refresh; không tạo ticker nền chỉ để tăng số đếm mỗi giây.
 
