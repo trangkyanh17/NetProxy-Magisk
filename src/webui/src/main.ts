@@ -134,7 +134,7 @@ async function run(raw: string) {
       if (!args.includes('--raw')) out = formatCtlOutput(out)
       if (['service', 'sub', 'node', 'catalog'].includes(args[0])) {
         void refreshCompletions()
-        if (args[0] === 'service') statusPoller.refresh()
+        if (args[0] === 'service') { statusPoller.markInteraction(); statusPoller.refresh() }
       }
     }
 
@@ -184,6 +184,7 @@ function historyNext() {
 }
 
 input.addEventListener('keydown', event => {
+  statusPoller.markInteraction()
   if (event.key === 'Enter') {
     event.preventDefault()
     if (!busy) void run(input.value)
@@ -202,11 +203,11 @@ input.addEventListener('keydown', event => {
 })
 
 terminal.addEventListener('click', () => input.focus())
-completeButton.addEventListener('click', completeInput)
-previousButton.addEventListener('click', () => { historyPrevious(); input.focus() })
-nextButton.addEventListener('click', () => { historyNext(); input.focus() })
-runButton.addEventListener('click', () => { void run(input.value) })
-serviceStatus.addEventListener('click', event => { event.stopPropagation(); void run('service status') })
+completeButton.addEventListener('click', () => { statusPoller.markInteraction(); completeInput() })
+previousButton.addEventListener('click', () => { statusPoller.markInteraction(); historyPrevious(); input.focus() })
+nextButton.addEventListener('click', () => { statusPoller.markInteraction(); historyNext(); input.focus() })
+runButton.addEventListener('click', () => { statusPoller.markInteraction(); void run(input.value) })
+serviceStatus.addEventListener('click', event => { event.stopPropagation(); statusPoller.markInteraction(); void run('service status') })
 
 document.addEventListener('visibilitychange', () => {
   statusPoller.setActive(!document.hidden)

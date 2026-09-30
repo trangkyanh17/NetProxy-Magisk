@@ -48,3 +48,75 @@ test('慢请求不重叠，隐藏时暂停，过期响应不可覆盖当前状�
   t.mock.timers.tick(30_000)
   assert.equal(pending.length, 0)
 })
+
+
+test('轮询在空闲后降频，交互后立即恢复活跃节奏', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  let now = 0
+  const pending = []
+  const results = []
+  const settle = async () => { for (let i = 0; i < 5; i++) await Promise.resolve() }
+  const poller = createPoller(
+    () => new Promise(resolve => pending.push(resolve)),
+    value => results.push(value),
+    { activeInterval: 5000, idleInterval: 20000, idleAfter: 30000, now: () => now },
+  )
+
+  poller.setActive(true)
+  assert.equal(pending.length, 1)
+  pending.shift()('initial')
+  await settle()
+
+  t.mock.timers.tick(4999)
+  assert.equal(pending.length, 0)
+  t.mock.timers.tick(1)
+  assert.equal(pending.length, 1)
+
+  now = 30000
+  pending.shift()('active')
+  await settle()
+  t.mock.timers.tick(19999)
+  assert.equal(pending.length, 0)
+  t.mock.timers.tick(1)
+  assert.equal(pending.length, 1)
+
+  now = 50000
+  pending.shift()('idle')
+  await settle()
+  now = 51000
+  poller.markInteraction()
+  assert.equal(pending.length, 0)
+  t.mock.timers.tick(4999)
+  assert.equal(pending.length, 0)
+  t.mock.timers.tick(1)
+  assert.equal(pending.length, 1)
+  pending.shift()('interaction')
+  await settle()
+  assert.deepEqual(results, ['initial', 'active', 'idle', 'interaction'])
+})
+
+test('隐藏中的在途响应作废，重新可见只刷新一次', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const pending = []
+  const results = []
+  const settle = async () => { for (let i = 0; i < 5; i++) await Promise.resolve() }
+  const poller = createPoller(() => new Promise(resolve => pending.push(resolve)), value => results.push(value))
+
+  poller.setActive(true)
+  assert.equal(pending.length, 1)
+  poller.setActive(false)
+  t.mock.timers.tick(60000)
+  assert.equal(pending.length, 1)
+  poller.setActive(true)
+  assert.equal(pending.length, 1)
+  pending.shift()('stale')
+  await settle()
+  assert.deepEqual(results, [])
+  assert.equal(pending.length, 1)
+  pending.shift()('fresh')
+  await settle()
+  assert.deepEqual(results, ['fresh'])
+  poller.setActive(false)
+  t.mock.timers.tick(60000)
+  assert.equal(pending.length, 0)
+})

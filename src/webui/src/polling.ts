@@ -1,13 +1,32 @@
+export interface PollerOptions {
+  activeInterval?: number
+  idleInterval?: number
+  idleAfter?: number
+  now?: () => number
+}
+
 export function createPoller<T>(
   request: () => Promise<T>,
   publish: (value: T) => void,
-  interval = 5000,
+  intervalOrOptions: number | PollerOptions = {},
 ) {
+  const options = typeof intervalOrOptions === 'number'
+    ? { activeInterval: intervalOrOptions }
+    : intervalOrOptions
+  const activeInterval = options.activeInterval ?? 5000
+  const idleInterval = options.idleInterval ?? 20000
+  const idleAfter = options.idleAfter ?? 30000
+  const now = options.now ?? Date.now
   let active = false
   let inFlight = false
   let requested = false
   let revision = 0
+  let lastInteraction = now()
   let timer: ReturnType<typeof setTimeout> | undefined
+
+  function nextInterval() {
+    return Math.max(0, now() - lastInteraction) >= idleAfter ? idleInterval : activeInterval
+  }
 
   function refresh() {
     revision++
@@ -25,18 +44,29 @@ export function createPoller<T>(
       inFlight = false
       if (!active) return
       if (requested) refresh()
-      else timer = setTimeout(refresh, interval)
+      else timer = setTimeout(refresh, nextInterval())
     })
+  }
+
+  function markInteraction() {
+    lastInteraction = now()
+    clearTimeout(timer)
+    if (!active || inFlight) return
+    timer = setTimeout(refresh, activeInterval)
   }
 
   return {
     refresh,
+    markInteraction,
     setActive(value: boolean) {
       if (active === value) return
       active = value
       revision++
       clearTimeout(timer)
-      if (active) refresh()
+      if (active) {
+        lastInteraction = now()
+        refresh()
+      }
     },
   }
 }
