@@ -35,6 +35,7 @@ const (
 var (
 	workerProcessRunning   = isProcessRunning
 	workerProcessPID       = isWorkerProcessPID
+	workerWakePID          = wakeProcess
 	workerVerifyRuntime    = verifyRuntimeState
 	workerLoadModule       = moduleconfig.LoadModule
 	workerUpdateModule     = moduleconfig.UpdateModule

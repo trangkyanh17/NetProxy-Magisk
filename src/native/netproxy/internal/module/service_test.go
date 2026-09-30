@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Fanju6/NetProxy-Magisk/src/native/netproxy/internal/catalog"
 	"github.com/Fanju6/NetProxy-Magisk/src/native/netproxy/internal/worker"
 )
 
@@ -149,11 +150,21 @@ func TestReconcileWorkerRestartsWithCurrentWiFiPolicy(t *testing.T) {
 	if err := os.WriteFile(options.ModuleConfig, []byte("WIFI_AUTO_SWITCH=0\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	originalStop, originalStart := workerStopProcess, workerStartProcess
+	if err := catalog.InitializeGroup(t.Context(), catalog.GroupOptions{
+		Root: options.CatalogRoot, GroupID: "auto", Name: "auto", Type: "subscription",
+		URL: "https://example.invalid/sub", AutoUpdate: true, UpdateInterval: 900,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	originalStop, originalStart, originalRead := workerStopProcess, workerStartProcess, workerReadStatusProcess
 	t.Cleanup(func() {
 		workerStopProcess = originalStop
 		workerStartProcess = originalStart
+		workerReadStatusProcess = originalRead
 	})
+	workerReadStatusProcess = func(context.Context, worker.Options) (worker.Status, error) {
+		return worker.Status{State: "running", PID: 123}, nil
+	}
 	order := make([]string, 0, 2)
 	workerStopProcess = func(opts worker.Options) error {
 		order = append(order, "stop")
@@ -167,7 +178,7 @@ func TestReconcileWorkerRestartsWithCurrentWiFiPolicy(t *testing.T) {
 		if opts.NetworkWatchEnabled {
 			t.Fatal("重启后的 Worker 使用了过期的网络监听设置")
 		}
-		return worker.Status{State: "stopped"}, nil
+		return worker.Status{State: "running"}, nil
 	}
 	if err := reconcileWorker(t.Context(), options); err != nil {
 		t.Fatal(err)

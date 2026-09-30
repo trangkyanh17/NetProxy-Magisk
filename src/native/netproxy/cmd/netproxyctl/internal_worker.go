@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	moduleconfig "github.com/Fanju6/NetProxy-Magisk/src/native/netproxy/internal/config"
 	moduleapp "github.com/Fanju6/NetProxy-Magisk/src/native/netproxy/internal/module"
 	"github.com/Fanju6/NetProxy-Magisk/src/native/netproxy/internal/paths"
 	"github.com/Fanju6/NetProxy-Magisk/src/native/netproxy/internal/worker"
@@ -107,6 +108,9 @@ func configureWorkerCallbacks(options *worker.Options, moduleDir, catalogRoot, m
 	moduleOptions.ProgressDir = progressDir
 	moduleOptions.WorkerPIDFile = pidFile
 	options.NetworkWatchEnabled = true
+	if module, err := moduleconfig.LoadModule(moduleConf); err == nil {
+		options.NetworkWatchEnabled = module.WiFiAutoSwitch
+	}
 	options.ReloadService = func(ctx context.Context) error {
 		return moduleapp.ReloadService(ctx, moduleOptions)
 	}

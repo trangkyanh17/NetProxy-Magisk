@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	moduleapp "github.com/Fanju6/NetProxy-Magisk/src/native/netproxy/internal/module"
+	"github.com/Fanju6/NetProxy-Magisk/src/native/netproxy/internal/worker"
 )
 
 func TestWriteJSONPreservesEmptyDataObject(t *testing.T) {
@@ -98,5 +101,32 @@ func TestInternalUsageOnlyListsProcessEntrypoints(t *testing.T) {
 		if strings.Contains(usage, removed) {
 			t.Fatalf("usage still lists removed entry %q: %s", removed, usage)
 		}
+	}
+}
+
+func TestConfigureWorkerCallbacksUsesWiFiAutoSwitch(t *testing.T) {
+	for _, tc := range []struct {
+		name, content string
+		want          bool
+	}{
+		{"off", "WIFI_AUTO_SWITCH=0\n", false},
+		{"on", "WIFI_AUTO_SWITCH=1\n", true},
+		{"malformed", "WIFI_AUTO_SWITCH=maybe\n", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			conf := filepath.Join(root, "config", "module.conf")
+			if err := os.MkdirAll(filepath.Dir(conf), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(conf, []byte(tc.content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			opts := worker.NewOptions(filepath.Join(root, "catalog"))
+			configureWorkerCallbacks(&opts, root, opts.Root, conf, filepath.Join(root, "sing-box"), "127.0.0.1:9090", "secret", filepath.Join(root, "progress"), filepath.Join(root, "worker.pid"))
+			if opts.NetworkWatchEnabled != tc.want {
+				t.Fatalf("NetworkWatchEnabled=%v want %v", opts.NetworkWatchEnabled, tc.want)
+			}
+		})
 	}
 }

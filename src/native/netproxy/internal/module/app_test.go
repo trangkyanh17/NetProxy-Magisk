@@ -14,6 +14,7 @@ import (
 	"github.com/Fanju6/NetProxy-Magisk/src/native/netproxy/internal/catalog"
 	"github.com/Fanju6/NetProxy-Magisk/src/native/netproxy/internal/provider"
 	"github.com/Fanju6/NetProxy-Magisk/src/native/netproxy/internal/subscription"
+	"github.com/Fanju6/NetProxy-Magisk/src/native/netproxy/internal/worker"
 )
 
 func TestNodeImportAppendsToDefaultGroup(t *testing.T) {
@@ -92,7 +93,7 @@ func TestUpdateAllSubscriptionsPreservesStructuredFailure(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(options.ModuleConfig), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(options.ModuleConfig, []byte("ACTIVE_GROUP_ID=default\nSELECTOR_MODE=urltest\nOUTBOUND_MODE=rule\n"), 0o600); err != nil {
+	if err := os.WriteFile(options.ModuleConfig, []byte("ACTIVE_GROUP_ID=default\nSELECTOR_MODE=urltest\nOUTBOUND_MODE=rule\nWIFI_AUTO_SWITCH=0\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := catalog.InitializeGroup(context.Background(), catalog.GroupOptions{
@@ -164,6 +165,22 @@ func TestAddSubscriptionCancellationReportsPersistedGroup(t *testing.T) {
 
 	root := t.TempDir()
 	options := newTestOptions(root)
+	if err := os.MkdirAll(filepath.Dir(options.ModuleConfig), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(options.ModuleConfig, []byte("WIFI_AUTO_SWITCH=0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldRead, oldStart := workerReadStatusProcess, workerStartProcess
+	t.Cleanup(func() { workerReadStatusProcess = oldRead; workerStartProcess = oldStart })
+	workerReadStatusProcess = func(context.Context, worker.Options) (worker.Status, error) {
+		return worker.Status{State: "stopped"}, nil
+	}
+	starts := 0
+	workerStartProcess = func(context.Context, worker.Options, string) (worker.Status, error) {
+		starts++
+		return worker.Status{State: "running"}, nil
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	type outcome struct {
 		result subscription.Result
@@ -200,6 +217,9 @@ func TestAddSubscriptionCancellationReportsPersistedGroup(t *testing.T) {
 	if err != nil || len(groups) != 1 {
 		t.Fatalf("persisted subscription group = %v, err=%v", groups, err)
 	}
+	if starts != 1 {
+		t.Fatalf("persisted cancelled add worker starts=%d want 1", starts)
+	}
 }
 
 func TestEditSubscriptionSchedulingOnlyDoesNotReload(t *testing.T) {
@@ -219,6 +239,13 @@ func TestEditSubscriptionSchedulingOnlyDoesNotReload(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	oldRead, oldWake := workerReadStatusProcess, workerWakeProcess
+	t.Cleanup(func() { workerReadStatusProcess = oldRead; workerWakeProcess = oldWake })
+	workerReadStatusProcess = func(context.Context, worker.Options) (worker.Status, error) {
+		return worker.Status{State: "running", PID: 123}, nil
+	}
+	wakes := 0
+	workerWakeProcess = func(worker.Options) error { wakes++; return nil }
 	interval := int64(1800)
 	result, err := EditSubscription(context.Background(), options, "schedule-only", subscription.EditOptions{
 		UpdateInterval: &interval, Now: now,
@@ -235,6 +262,9 @@ func TestEditSubscriptionSchedulingOnlyDoesNotReload(t *testing.T) {
 	}
 	if metadata.UpdateInterval != interval || metadata.NextUpdateEpoch == 0 {
 		t.Fatalf("调度字段未正确持久化: %+v", metadata)
+	}
+	if wakes != 1 {
+		t.Fatalf("schedule edit wakes=%d want 1", wakes)
 	}
 }
 
@@ -289,5 +319,191 @@ func TestEditSubscriptionHistoryFailureKeepsProviderAndMetadata(t *testing.T) {
 	}
 	if !strings.Contains(subscriptionErr.Error(), "订阅历史写入失败") {
 		t.Fatalf("历史错误消息不明确: %v", subscriptionErr)
+	}
+}
+
+func TestWorkerDemandTracksWiFiAndScheduledSubscriptions(t *testing.T) {
+	root := t.TempDir()
+	options := newTestOptions(root)
+	if err := os.MkdirAll(filepath.Dir(options.ModuleConfig), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(options.ModuleConfig, []byte("WIFI_AUTO_SWITCH=0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.InitializeGroup(t.Context(), catalog.GroupOptions{Root: options.CatalogRoot, GroupID: "default", Name: "local", Type: "local"}); err != nil {
+		t.Fatal(err)
+	}
+
+	needed, watch, err := workerDemand(t.Context(), options)
+	if err != nil || needed || watch {
+		t.Fatalf("idle demand = needed:%v watch:%v err:%v", needed, watch, err)
+	}
+
+	if err := os.WriteFile(options.ModuleConfig, []byte("WIFI_AUTO_SWITCH=1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	needed, watch, err = workerDemand(t.Context(), options)
+	if err != nil || !needed || !watch {
+		t.Fatalf("wifi demand = needed:%v watch:%v err:%v", needed, watch, err)
+	}
+
+	if err := os.WriteFile(options.ModuleConfig, []byte("WIFI_AUTO_SWITCH=0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.InitializeGroup(t.Context(), catalog.GroupOptions{Root: options.CatalogRoot, GroupID: "auto", Name: "auto", Type: "subscription", URL: "https://example.invalid/sub", AutoUpdate: true, UpdateInterval: 900}); err != nil {
+		t.Fatal(err)
+	}
+	needed, watch, err = workerDemand(t.Context(), options)
+	if err != nil || !needed || watch {
+		t.Fatalf("schedule demand = needed:%v watch:%v err:%v", needed, watch, err)
+	}
+}
+
+func TestWorkerDemandFailsOpenOnAmbiguousState(t *testing.T) {
+	root := t.TempDir()
+	options := newTestOptions(root)
+	if err := os.MkdirAll(filepath.Dir(options.ModuleConfig), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(options.CatalogRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(options.ModuleConfig, []byte("WIFI_AUTO_SWITCH=maybe\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	needed, watch, err := workerDemand(t.Context(), options)
+	if err == nil || !needed || !watch {
+		t.Fatalf("ambiguous config must fail-open: needed:%v watch:%v err:%v", needed, watch, err)
+	}
+}
+
+func TestScheduleReconcileWakesRunningWorker(t *testing.T) {
+	root := t.TempDir()
+	options := newTestOptions(root)
+	if err := os.MkdirAll(filepath.Dir(options.ModuleConfig), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(options.ModuleConfig, []byte("WIFI_AUTO_SWITCH=0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.InitializeGroup(t.Context(), catalog.GroupOptions{Root: options.CatalogRoot, GroupID: "auto", Name: "auto", Type: "subscription", URL: "https://example.invalid/sub", AutoUpdate: true, UpdateInterval: 900}); err != nil {
+		t.Fatal(err)
+	}
+
+	oldRead, oldWake, oldStop, oldStart := workerReadStatusProcess, workerWakeProcess, workerStopProcess, workerStartProcess
+	t.Cleanup(func() {
+		workerReadStatusProcess = oldRead
+		workerWakeProcess = oldWake
+		workerStopProcess = oldStop
+		workerStartProcess = oldStart
+	})
+	workerReadStatusProcess = func(context.Context, worker.Options) (worker.Status, error) {
+		return worker.Status{State: "running", PID: 123}, nil
+	}
+	wakes, stops, starts := 0, 0, 0
+	workerWakeProcess = func(worker.Options) error { wakes++; return nil }
+	workerStopProcess = func(worker.Options) error { stops++; return nil }
+	workerStartProcess = func(context.Context, worker.Options, string) (worker.Status, error) {
+		starts++
+		return worker.Status{State: "running"}, nil
+	}
+	if err := reconcileWorkerSchedule(t.Context(), options); err != nil {
+		t.Fatal(err)
+	}
+	if wakes != 1 || stops != 0 || starts != 0 {
+		t.Fatalf("schedule reconcile wake/stop/start = %d/%d/%d", wakes, stops, starts)
+	}
+}
+
+func TestWorkerReconcileStopsWhenDemandDisappears(t *testing.T) {
+	root := t.TempDir()
+	options := newTestOptions(root)
+	if err := os.MkdirAll(filepath.Dir(options.ModuleConfig), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(options.ModuleConfig, []byte("WIFI_AUTO_SWITCH=0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.InitializeGroup(t.Context(), catalog.GroupOptions{Root: options.CatalogRoot, GroupID: "default", Name: "local", Type: "local"}); err != nil {
+		t.Fatal(err)
+	}
+	oldRead, oldStop, oldStart := workerReadStatusProcess, workerStopProcess, workerStartProcess
+	t.Cleanup(func() { workerReadStatusProcess = oldRead; workerStopProcess = oldStop; workerStartProcess = oldStart })
+	workerReadStatusProcess = func(context.Context, worker.Options) (worker.Status, error) {
+		return worker.Status{State: "running", PID: 123}, nil
+	}
+	stops, starts := 0, 0
+	workerStopProcess = func(worker.Options) error { stops++; return nil }
+	workerStartProcess = func(context.Context, worker.Options, string) (worker.Status, error) {
+		starts++
+		return worker.Status{}, nil
+	}
+	if err := reconcileWorkerSchedule(t.Context(), options); err != nil {
+		t.Fatal(err)
+	}
+	if stops != 1 || starts != 0 {
+		t.Fatalf("stop/start = %d/%d", stops, starts)
+	}
+}
+
+func TestRemoveSubscriptionStopsWorkerAfterLastScheduleDemand(t *testing.T) {
+	root := t.TempDir()
+	options := newTestOptions(root)
+	if err := os.MkdirAll(filepath.Dir(options.ModuleConfig), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(options.ModuleConfig, []byte("ACTIVE_GROUP_ID=default\nSELECTOR_MODE=urltest\nWIFI_AUTO_SWITCH=0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.InitializeGroup(t.Context(), catalog.GroupOptions{Root: options.CatalogRoot, GroupID: "default", Name: "local", Type: "local"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.InitializeGroup(t.Context(), catalog.GroupOptions{Root: options.CatalogRoot, GroupID: "auto", Name: "auto", Type: "subscription", URL: "https://example.invalid/sub", AutoUpdate: true, UpdateInterval: 900}); err != nil {
+		t.Fatal(err)
+	}
+	oldRead, oldStop := workerReadStatusProcess, workerStopProcess
+	t.Cleanup(func() { workerReadStatusProcess = oldRead; workerStopProcess = oldStop })
+	workerReadStatusProcess = func(context.Context, worker.Options) (worker.Status, error) {
+		return worker.Status{State: "running", PID: 123}, nil
+	}
+	stops := 0
+	workerStopProcess = func(worker.Options) error { stops++; return nil }
+	if err := RemoveSubscription(t.Context(), options, "auto", ""); err != nil {
+		t.Fatal(err)
+	}
+	if stops != 1 {
+		t.Fatalf("remove last schedule demand stops=%d want 1", stops)
+	}
+}
+
+func TestUpdateSubscriptionWakesRunningWorker(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"outbounds":[{"type":"socks","tag":"updated","server":"127.0.0.1","server_port":1080}]}`))
+	}))
+	defer server.Close()
+	root := t.TempDir()
+	options := newTestOptions(root)
+	if err := os.MkdirAll(filepath.Dir(options.ModuleConfig), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(options.ModuleConfig, []byte("WIFI_AUTO_SWITCH=0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.InitializeGroup(t.Context(), catalog.GroupOptions{Root: options.CatalogRoot, GroupID: "auto", Name: "auto", Type: "subscription", URL: server.URL, AutoUpdate: true, UpdateInterval: 900, UpdateViaProxy: "never", Timeout: 5}); err != nil {
+		t.Fatal(err)
+	}
+	oldRead, oldWake := workerReadStatusProcess, workerWakeProcess
+	t.Cleanup(func() { workerReadStatusProcess = oldRead; workerWakeProcess = oldWake })
+	workerReadStatusProcess = func(context.Context, worker.Options) (worker.Status, error) {
+		return worker.Status{State: "running", PID: 123}, nil
+	}
+	wakes := 0
+	workerWakeProcess = func(worker.Options) error { wakes++; return nil }
+	if _, err := UpdateSubscription(t.Context(), options, "auto"); err != nil {
+		t.Fatal(err)
+	}
+	if wakes != 1 {
+		t.Fatalf("manual update wakes=%d want 1", wakes)
 	}
 }

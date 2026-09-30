@@ -89,6 +89,19 @@ func waitForWorkerPID(ctx context.Context, path string, pid int, timeout time.Du
 	}
 }
 
+// Wake 请求已运行的 Worker 立即重新计算订阅调度。
+func Wake(options Options) error {
+	if err := validateOptions(options); err != nil {
+		return err
+	}
+	pid := readPID(options.PIDFile)
+	if pid <= 0 || !workerProcessPID(pid) {
+		_ = os.Remove(options.PIDFile)
+		return nil
+	}
+	return workerWakePID(pid)
+}
+
 // Stop 请求 Worker 优雅退出。
 func Stop(options Options) error {
 	pid := readPID(options.PIDFile)

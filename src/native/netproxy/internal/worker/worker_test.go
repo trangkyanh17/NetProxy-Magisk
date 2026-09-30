@@ -1238,3 +1238,36 @@ func TestWorkerStartRequiresPIDState(t *testing.T) {
 		t.Fatalf("missing PID state was not reported: %v", err)
 	}
 }
+
+func TestWakeSignalsOnlyVerifiedWorkerPID(t *testing.T) {
+	root := t.TempDir()
+	options := NewOptions(root)
+	options.PIDFile = filepath.Join(root, "worker.pid")
+	options.ModuleConf = filepath.Join(root, "module.conf")
+	if err := os.WriteFile(options.PIDFile, []byte("4242\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldCheck, oldWake := workerProcessPID, workerWakePID
+	t.Cleanup(func() { workerProcessPID = oldCheck; workerWakePID = oldWake })
+	workerProcessPID = func(pid int) bool { return pid == 4242 }
+	got := 0
+	workerWakePID = func(pid int) error { got = pid; return nil }
+	if err := Wake(options); err != nil {
+		t.Fatal(err)
+	}
+	if got != 4242 {
+		t.Fatalf("wake pid=%d want 4242", got)
+	}
+
+	got = 0
+	workerProcessPID = func(int) bool { return false }
+	if err := Wake(options); err != nil {
+		t.Fatal(err)
+	}
+	if got != 0 {
+		t.Fatalf("stale pid was signalled: %d", got)
+	}
+	if _, err := os.Stat(options.PIDFile); !os.IsNotExist(err) {
+		t.Fatalf("stale pid file not removed: %v", err)
+	}
+}

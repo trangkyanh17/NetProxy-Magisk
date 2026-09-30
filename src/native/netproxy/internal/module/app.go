@@ -24,8 +24,10 @@ import (
 )
 
 var (
-	workerStartProcess = worker.Start
-	workerStopProcess  = worker.Stop
+	workerStartProcess      = worker.Start
+	workerStopProcess       = worker.Stop
+	workerReadStatusProcess = worker.ReadStatus
+	workerWakeProcess       = worker.Wake
 )
 
 // Options 描述模块目录、运行时目录和平台适配器路径。
@@ -553,6 +555,7 @@ func RemoveSubscription(ctx context.Context, options Options, query, replacement
 		return err
 	}
 	deleted = true
+	reconcileWorkerScheduleBestEffort(ctx, options)
 	if service.ProcessRunning(options.SingBoxPath) {
 		_, reloadErr := ManageService(ctx, options, "reload")
 		return reloadErr
@@ -703,6 +706,7 @@ func AddSubscription(ctx context.Context, options SubscriptionOptions) (result s
 	if err := catalog.InitializeGroup(ctx, catalog.GroupOptions{Root: options.CatalogRoot, GroupID: groupID, Name: options.Name, Type: "subscription", URL: options.URL, UserAgent: options.UserAgent, HWID: options.HWID, CustomHeaders: options.Headers, AutoUpdate: options.AutoUpdate, UpdateInterval: options.UpdateInterval, IntervalSource: options.IntervalSource, UpdateViaProxy: options.UpdateViaProxy, Include: options.Include, Exclude: options.Exclude, AllowInsecure: options.AllowInsecure, Timeout: options.Timeout}); err != nil {
 		return subscription.Result{}, err
 	}
+	defer reconcileWorkerScheduleBestEffort(ctx, options.Options)
 	workerOptions := workerOptions(options.Options)
 	// 分组初始化已经提交；首次下载失败时也必须向客户端报告设置已持久化。
 	workerOptions.PersistedBeforeUpdate = true
@@ -727,6 +731,7 @@ func UpdateSubscription(ctx context.Context, options Options, query string) (res
 	if err != nil {
 		return subscription.Result{}, err
 	}
+	defer reconcileWorkerScheduleBestEffort(ctx, options)
 	return worker.UpdateGroup(ctx, workerOptions(options), groupID, time.Now(), nil)
 }
 
@@ -743,12 +748,16 @@ func EditSubscription(ctx context.Context, options Options, query string, edit s
 	edit.GroupID = groupID
 	edit.ProgressDir = options.ProgressDir
 	edit.DeferUpdate = true
+	scheduleChanged := edit.AutoUpdate != nil || edit.UpdateInterval != nil
 	if edit.Now.IsZero() {
 		edit.Now = time.Now()
 	}
 	edited, err := subscription.Edit(ctx, edit)
 	if err != nil {
 		return edited, err
+	}
+	if scheduleChanged {
+		defer reconcileWorkerScheduleBestEffort(ctx, options)
 	}
 	if !edited.RequiresUpdate && !edited.NameChanged {
 		if !service.ProcessRunning(options.SingBoxPath) {
@@ -809,6 +818,9 @@ func UpdateAllSubscriptions(ctx context.Context, options Options) (result worker
 	if err != nil {
 		return worker.Summary{}, err
 	}
+	if len(ids) > 0 {
+		defer reconcileWorkerScheduleBestEffort(ctx, options)
+	}
 	summary := worker.Summary{Updated: []string{}, Failed: []string{}}
 	var firstUpdateErr error
 	for _, id := range ids {
@@ -824,14 +836,73 @@ func UpdateAllSubscriptions(ctx context.Context, options Options) (result worker
 	return summary, firstUpdateErr
 }
 
-func reconcileWorker(ctx context.Context, options Options) error {
-	workerOpts := workerOptions(options)
-	if err := workerStopProcess(workerOpts); err != nil {
-		return fmt.Errorf("停止旧 Worker: %w", err)
+func workerDemand(ctx context.Context, options Options) (needed bool, networkWatch bool, err error) {
+	module, err := moduleconfig.LoadModule(options.ModuleConfig)
+	if err != nil {
+		return true, true, fmt.Errorf("读取 Worker 模块配置: %w", err)
 	}
-	executable := paths.New(options.ModuleDir).Executable()
-	if _, err := workerStartProcess(ctx, workerOpts, executable); err != nil {
-		return fmt.Errorf("按新配置启动 Worker: %w", err)
+	networkWatch = module.WiFiAutoSwitch
+	schedule, err := catalog.Schedule(ctx, options.CatalogRoot, time.Now().Unix())
+	if err != nil {
+		return true, networkWatch, fmt.Errorf("读取 Worker 订阅调度: %w", err)
+	}
+	return networkWatch || schedule.Nearest > 0, networkWatch, nil
+}
+
+func reconcileWorkerScheduleBestEffort(ctx context.Context, options Options) {
+	reconcileCtx := context.WithoutCancel(ctx)
+	if err := reconcileWorkerSchedule(reconcileCtx, options); err != nil {
+		logService(options, "WARN", "worker.reconcile", "failed", "订阅调度已保存，但后台 Worker 重整失败: %v", err)
+	}
+}
+
+func reconcileWorker(ctx context.Context, options Options) error {
+	return reconcileWorkerState(ctx, options, true)
+}
+
+func reconcileWorkerSchedule(ctx context.Context, options Options) error {
+	return reconcileWorkerState(ctx, options, false)
+}
+
+func reconcileWorkerState(ctx context.Context, options Options, restartRunning bool) error {
+	needed, _, demandErr := workerDemand(ctx, options)
+	workerOpts := workerOptions(options)
+	status, statusErr := workerReadStatusProcess(ctx, workerOpts)
+	if statusErr != nil {
+		return errors.Join(demandErr, fmt.Errorf("读取 Worker 状态: %w", statusErr))
+	}
+	running := status.State == "running"
+	if !needed && demandErr == nil {
+		if !running {
+			return nil
+		}
+		if err := workerStopProcess(workerOpts); err != nil {
+			return fmt.Errorf("停止无任务 Worker: %w", err)
+		}
+		return nil
+	}
+	if !running {
+		executable := paths.New(options.ModuleDir).Executable()
+		if _, err := workerStartProcess(ctx, workerOpts, executable); err != nil {
+			return errors.Join(demandErr, fmt.Errorf("按需启动 Worker: %w", err))
+		}
+		return demandErr
+	}
+	if demandErr != nil {
+		return demandErr
+	}
+	if restartRunning {
+		if err := workerStopProcess(workerOpts); err != nil {
+			return fmt.Errorf("停止旧 Worker: %w", err)
+		}
+		executable := paths.New(options.ModuleDir).Executable()
+		if _, err := workerStartProcess(ctx, workerOpts, executable); err != nil {
+			return fmt.Errorf("按新配置启动 Worker: %w", err)
+		}
+		return nil
+	}
+	if err := workerWakeProcess(workerOpts); err != nil {
+		return fmt.Errorf("唤醒 Worker: %w", err)
 	}
 	return nil
 }
