@@ -1,5 +1,6 @@
 package com.fanjv.netproxy.feature.dashboard.presentation
 
+import android.os.SystemClock
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.fanjv.netproxy.R
@@ -13,13 +14,14 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.net.NetworkInterface
 
 internal data class CatalogDashboardUiState(
@@ -66,12 +68,15 @@ internal class CatalogDashboardViewModel(
     private val _state = MutableStateFlow(CatalogDashboardUiState())
     val state: StateFlow<CatalogDashboardUiState> = _state.asStateFlow()
     private var refreshJob: Job? = null
-    private var uptimeJob: Job? = null
+    private val pollWake = Channel<Unit>(Channel.CONFLATED)
+    private var forceIpOnNextSnapshot = false
+    private var lastInteractionElapsedMillis = 0L
     private var visible = false
     private var serviceTransitionRevision = 0L
     private val totalMemoryBytes = environment.totalMemoryBytes
     private val snapshotReducer = DashboardSnapshotReducer(totalMemoryBytes)
     private val trafficReducer = TrafficTimelineReducer()
+    private val localIpv4Cache = LocalIpv4Cache(loader = ::loadLocalIpv4Address)
 
     init {
         viewModelScope.launch {
@@ -84,26 +89,24 @@ internal class CatalogDashboardViewModel(
                     loading = availability.moduleInstalled
                 )
             }
-            if (availability.moduleInstalled && visible) startPolling()
+            if (availability.moduleInstalled && visible) requestPollingEvent(forceIp = true)
         }
     }
 
     fun refresh() {
-        if (_state.value.moduleInstalled) {
-            viewModelScope.launch { refreshSnapshot() }
-        }
+        if (_state.value.moduleInstalled) requestPollingEvent(forceIp = true)
     }
 
     fun setVisible(visible: Boolean) {
         this.visible = visible
         if (visible) {
-            startUptimeTicker()
-            if (_state.value.moduleInstalled) startPolling()
+            if (_state.value.moduleInstalled) requestPollingEvent(forceIp = true)
         } else {
             refreshJob?.cancel()
             refreshJob = null
-            uptimeJob?.cancel()
-            uptimeJob = null
+            while (pollWake.tryReceive().isSuccess) {
+                // 清除后台期间遗留的 UI 刷新信号。
+            }
         }
     }
 
@@ -142,34 +145,40 @@ internal class CatalogDashboardViewModel(
         _state.update { it.copy(notice = UiText.Empty) }
     }
 
-    private fun startPolling() {
-        refreshJob?.cancel()
+    private fun requestPollingEvent(forceIp: Boolean) {
+        lastInteractionElapsedMillis = SystemClock.elapsedRealtime()
+        forceIpOnNextSnapshot = forceIpOnNextSnapshot || forceIp
+        if (!visible || !_state.value.moduleInstalled) return
+        if (refreshJob?.isActive == true) {
+            pollWake.trySend(Unit)
+            return
+        }
+        while (pollWake.tryReceive().isSuccess) {
+            // 新 polling cycle không kế thừa wake cũ.
+        }
         refreshJob = viewModelScope.launch {
-            refreshSnapshot()
-            while (isActive) {
-                delay(5000)
-                refreshSnapshot()
-            }
-        }
-    }
+            var confirmPending = true
+            while (isActive && visible) {
+                val forceIpRefresh = forceIpOnNextSnapshot
+                forceIpOnNextSnapshot = false
+                refreshSnapshot(forceIpRefresh)
 
-    private fun startUptimeTicker() {
-        uptimeJob?.cancel()
-        uptimeJob = viewModelScope.launch {
-            while (isActive) {
-                _state.update { current ->
-                    if (current.readyAt <= 0 || current.serviceState != "ready") current
-                    else current.copy(
-                        uptimeSeconds = (System.currentTimeMillis() / 1000 - current.readyAt)
-                            .coerceAtLeast(0)
-                    )
+                val idleMillis = SystemClock.elapsedRealtime() - lastInteractionElapsedMillis
+                val waitMillis = DashboardPollingPolicy.nextDelayMillis(idleMillis, confirmPending)
+                val woke = withTimeoutOrNull(waitMillis) {
+                    pollWake.receive()
+                    true
+                } ?: false
+                if (woke) {
+                    confirmPending = true
+                    continue
                 }
-                delay(1000)
+                if (confirmPending) confirmPending = false
             }
         }
     }
 
-    private suspend fun refreshSnapshot() {
+    private suspend fun refreshSnapshot(forceIpRefresh: Boolean = false) {
         if (_state.value.isServiceTransitioning) return
         val requestRevision = serviceTransitionRevision
 
@@ -194,7 +203,10 @@ internal class CatalogDashboardViewModel(
                     current = current,
                     service = service,
                     nowMillis = nowMillis,
-                    localAddress = localAddress()
+                    localAddress = localIpv4Cache.read(
+                        nowElapsedMillis = SystemClock.elapsedRealtime(),
+                        force = forceIpRefresh
+                    )
                 ).copy(
                     downloadBytesPerSecond = timeline.downloadBytesPerSecond,
                     uploadBytesPerSecond = timeline.uploadBytesPerSecond,
@@ -251,7 +263,7 @@ internal class CatalogDashboardViewModel(
                             noticeId = it.noticeId + 1
                         )
                     }
-                    refreshSnapshot()
+                    requestPollingEvent(forceIp = false)
                 }
                 .onFailure { error ->
                     if (changesServiceState) serviceTransitionRevision++
@@ -267,20 +279,19 @@ internal class CatalogDashboardViewModel(
                             noticeId = it.noticeId + 1
                         )
                     }
-                    refreshSnapshot()
+                    requestPollingEvent(forceIp = false)
                 }
         }
     }
 
-    private fun localAddress(): String = runCatching {
+    private fun loadLocalIpv4Address(): String? = runCatching {
         NetworkInterface.getNetworkInterfaces().toList()
             .asSequence()
             .filter { it.isUp && !it.isLoopback }
             .flatMap { it.inetAddresses.toList().asSequence() }
             .firstOrNull { !it.isLoopbackAddress && it.hostAddress?.contains(':') == false }
             ?.hostAddress
-            ?: "--"
-    }.getOrDefault("--")
+    }.getOrNull()
 }
 
 /** 仅接受当前启停代次且不处于过渡操作中的服务快照。 */
