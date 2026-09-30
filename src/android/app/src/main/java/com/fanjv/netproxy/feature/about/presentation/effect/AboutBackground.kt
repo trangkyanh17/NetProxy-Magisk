@@ -1,6 +1,7 @@
 package com.fanjv.netproxy.feature.about.presentation.effect
 
 import android.annotation.SuppressLint
+import android.os.SystemClock
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.layout.Box
@@ -10,7 +11,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
@@ -32,6 +32,7 @@ import kotlin.math.floor
 @Composable
 internal fun AboutBackground(
     active: Boolean,
+    interactionRevision: Long = 0L,
     modifier: Modifier = Modifier,
     backdropModifier: Modifier = Modifier,
     alpha: () -> Float = { 1f },
@@ -88,6 +89,7 @@ internal fun AboutBackground(
                     darkTheme = darkTheme,
                     surface = surface,
                     active = active,
+                    interactionRevision = interactionRevision,
                     colorStage = { colorStage.value },
                     alpha = alpha,
                 ),
@@ -103,6 +105,7 @@ private fun Modifier.aboutBackgroundDraw(
     darkTheme: Boolean,
     surface: Color,
     active: Boolean,
+    interactionRevision: Long,
     colorStage: () -> Float,
     alpha: () -> Float,
 ): Modifier = this then AboutBackgroundElement(
@@ -112,6 +115,7 @@ private fun Modifier.aboutBackgroundDraw(
     darkTheme = darkTheme,
     surface = surface,
     active = active,
+    interactionRevision = interactionRevision,
     colorStage = colorStage,
     alpha = alpha,
 )
@@ -124,6 +128,7 @@ private data class AboutBackgroundElement(
     val darkTheme: Boolean,
     val surface: Color,
     val active: Boolean,
+    val interactionRevision: Long,
     val colorStage: () -> Float,
     val alpha: () -> Float,
 ) : ModifierNodeElement<AboutBackgroundNode>() {
@@ -134,6 +139,7 @@ private data class AboutBackgroundElement(
         darkTheme = darkTheme,
         surface = surface,
         active = active,
+        interactionRevision = interactionRevision,
         colorStage = colorStage,
         alpha = alpha,
     )
@@ -146,6 +152,7 @@ private data class AboutBackgroundElement(
             darkTheme = darkTheme,
             surface = surface,
             active = active,
+            interactionRevision = interactionRevision,
             colorStage = colorStage,
             alpha = alpha,
         )
@@ -160,15 +167,20 @@ private class AboutBackgroundNode(
     private var darkTheme: Boolean,
     private var surface: Color,
     private var active: Boolean,
+    private var interactionRevision: Long,
     private var colorStage: () -> Float,
     private var alpha: () -> Float,
 ) : Modifier.Node(), DrawModifierNode {
     private var animationJob: Job? = null
     private var animationTime = 0f
     private var startOffset = 0f
+    private var lastInteractionElapsedNanos = SystemClock.elapsedRealtimeNanos()
 
     override fun onAttach() {
-        if (active) startAnimation()
+        if (active) {
+            lastInteractionElapsedNanos = SystemClock.elapsedRealtimeNanos()
+            startAnimation()
+        }
     }
 
     override fun onDetach() {
@@ -183,6 +195,7 @@ private class AboutBackgroundNode(
         darkTheme: Boolean,
         surface: Color,
         active: Boolean,
+        interactionRevision: Long,
         colorStage: () -> Float,
         alpha: () -> Float,
     ) {
@@ -194,9 +207,18 @@ private class AboutBackgroundNode(
         this.colorStage = colorStage
         this.alpha = alpha
 
+        val interactionChanged = this.interactionRevision != interactionRevision
+        this.interactionRevision = interactionRevision
         if (this.active != active) {
             this.active = active
-            if (active) startAnimation() else stopAnimation()
+            if (active) {
+                lastInteractionElapsedNanos = SystemClock.elapsedRealtimeNanos()
+                startAnimation()
+            } else {
+                stopAnimation()
+            }
+        } else if (active && interactionChanged) {
+            lastInteractionElapsedNanos = SystemClock.elapsedRealtimeNanos()
         }
         invalidateDraw()
     }
@@ -204,15 +226,19 @@ private class AboutBackgroundNode(
     private fun startAnimation() {
         animationJob?.cancel()
         startOffset = animationTime
+        val originElapsedNanos = SystemClock.elapsedRealtimeNanos()
         animationJob = coroutineScope.launch {
-            val minimumFrameNanos = 1_000_000_000L / 60L
-            val origin = withFrameNanos { it }
-            var lastFrame = origin
-            while (isActive) {
-                val now = withFrameNanos { it }
-                if (now - lastFrame < minimumFrameNanos) continue
-                lastFrame = now
-                animationTime = startOffset + (now - origin) / 1_000_000_000f
+            while (isActive && active) {
+                val nowElapsedNanos = SystemClock.elapsedRealtimeNanos()
+                val idleMillis = ((nowElapsedNanos - lastInteractionElapsedNanos) / 1_000_000L)
+                    .coerceAtLeast(0L)
+                val targetFps = AboutAnimationPolicy.targetFps(active, idleMillis)
+                if (targetFps <= 0) break
+                val frameDelayMillis = (1_000L + targetFps - 1L) / targetFps
+                delay(frameDelayMillis)
+                val frameElapsedNanos = SystemClock.elapsedRealtimeNanos()
+                animationTime = startOffset +
+                    (frameElapsedNanos - originElapsedNanos) / 1_000_000_000f
                 invalidateDraw()
             }
         }

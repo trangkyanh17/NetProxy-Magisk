@@ -29,6 +29,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -51,6 +52,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.graphics.createBitmap
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.fanjv.netproxy.core.ui.component.BackIconButton
 import com.fanjv.netproxy.core.ui.component.BlurredBar
 import com.fanjv.netproxy.core.ui.component.rememberBlurBackdrop
@@ -83,6 +85,19 @@ internal fun AboutScreenMiuix(
 ) {
     val topAppBarScrollBehavior = MiuixScrollBehavior()
     val lazyListState = rememberLazyListState()
+    var lifecycleResumed by remember { mutableStateOf(false) }
+    var interactionRevision by remember { mutableStateOf(0L) }
+
+    LifecycleResumeEffect(Unit) {
+        lifecycleResumed = true
+        interactionRevision += 1L
+        onPauseOrDispose { lifecycleResumed = false }
+    }
+    val scrollInProgress = lazyListState.isScrollInProgress
+    LaunchedEffect(scrollInProgress) {
+        if (scrollInProgress) interactionRevision += 1L
+    }
+
     val scrollProgress = remember(lazyListState) {
         {
             if (lazyListState.firstVisibleItemIndex > 0) {
@@ -147,6 +162,8 @@ internal fun AboutScreenMiuix(
                 topAppBarScrollBehavior = topAppBarScrollBehavior,
                 lazyListState = lazyListState,
                 scrollProgress = scrollProgress,
+                lifecycleResumed = lifecycleResumed,
+                interactionRevision = interactionRevision,
             )
         }
     }
@@ -170,6 +187,8 @@ private fun AboutContent(
     topAppBarScrollBehavior: ScrollBehavior,
     lazyListState: LazyListState,
     scrollProgress: () -> Float,
+    lifecycleResumed: Boolean,
+    interactionRevision: Long,
 ) {
     val context = LocalContext.current
     val layoutDirection = LocalLayoutDirection.current
@@ -180,10 +199,11 @@ private fun AboutContent(
     val backdrop = rememberLayerBackdrop()
     val darkTheme = isInDarkTheme()
     val enableBlur = LocalEnableBlur.current
-    val backgroundActive = remember(enableBlur) {
+    val backgroundCapable = remember(enableBlur) {
         enableBlur && Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM &&
                 isRuntimeShaderSupported()
     }
+    val backgroundActive = backgroundCapable && lifecycleResumed
     val cardBlendColors = remember(darkTheme) { aboutCardBlendColors(darkTheme) }
     val logoBlendColors = remember(darkTheme) { aboutLogoBlendColors(darkTheme) }
     var logoHeight by remember { mutableStateOf(300.dp) }
@@ -201,6 +221,7 @@ private fun AboutContent(
 
     AboutBackground(
         active = backgroundActive,
+        interactionRevision = interactionRevision,
         modifier = Modifier.fillMaxSize(),
         backdropModifier = Modifier.layerBackdrop(backdrop),
         alpha = { 1f - scrollProgress() },
